@@ -1,0 +1,115 @@
+---
+/**
+ * Calendario mensual estilo Peluditos.
+ * - Puntos en los días con citas (no canceladas).
+ * - Banner .next con la próxima cita más cercana.
+ * - Emite `cal-select` (CustomEvent) con { date: 'YYYY-MM-DD', items: [...] }.
+ */
+interface Props {
+  appointments?: any[];
+}
+const { appointments = [] } = Astro.props;
+---
+
+<div
+  class="appt-cal card"
+  data-appts={JSON.stringify(appointments)}
+>
+  <div data-banner class="card next" style="margin-bottom:.8rem"></div>
+  <div class="row" style="margin:.5rem 0">
+    <button type="button" class="btn gh sm" data-prev aria-label="Mes anterior">‹</button>
+    <strong data-title></strong>
+    <button type="button" class="btn gh sm" data-next aria-label="Mes siguiente">›</button>
+  </div>
+  <div class="cal">
+    <span>L</span><span>M</span><span>X</span><span>J</span><span>V</span><span>S</span><span>D</span>
+  </div>
+  <div class="cal" data-grid style="margin-top:3px"></div>
+</div>
+
+<script>
+  document.querySelectorAll(".appt-cal").forEach((rootEl) => {
+    const root = rootEl as HTMLElement;
+    if (root.dataset.init) return;
+    root.dataset.init = "1";
+    const all = JSON.parse(root.dataset.appts || "[]");
+    const grid = root.querySelector("[data-grid]") as HTMLElement;
+    const title = root.querySelector("[data-title]") as HTMLElement;
+    const banner = root.querySelector("[data-banner]") as HTMLElement;
+    const live = all.filter((a: any) => a.status !== "cancelled");
+
+    const pad = (n: number) => String(n).padStart(2, "0");
+    const dayKey = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    const byDay = new Map<string, any[]>();
+    for (const a of live) {
+      const k = dayKey(new Date(a.startAt));
+      if (!byDay.has(k)) byDay.set(k, []);
+      byDay.get(k)!.push(a);
+    }
+
+    const upcoming = live
+      .filter((a: any) => new Date(a.startAt).getTime() >= Date.now() - 36e5)
+      .sort((x: any, y: any) => +new Date(x.startAt) - +new Date(y.startAt))[0];
+    if (upcoming) {
+      const d = new Date(upcoming.startAt);
+      banner.innerHTML =
+        `<p class="small" style="margin:0">Tu próxima cita</p>` +
+        `<div class="stat" style="font-size:1.4rem;margin:.3rem 0">${d.toLocaleDateString("es-ES", { weekday: "long", day: "numeric", month: "long" })}, ${d.toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" })}</div>` +
+        `<p style="margin:0">${upcoming.serviceName ?? ""} · ${upcoming.petName ?? ""}</p>`;
+    } else {
+      banner.innerHTML = `<p style="margin:0">Sin próximas citas.</p>`;
+    }
+
+    let view = new Date();
+    view.setDate(1);
+    let selected: string | null = upcoming
+      ? dayKey(new Date(upcoming.startAt))
+      : dayKey(new Date());
+
+    const emit = (date: string) => {
+      selected = date;
+      root.dispatchEvent(
+        new CustomEvent("cal-select", { detail: { date, items: byDay.get(date) ?? [] }, bubbles: false }),
+      );
+      paint();
+    };
+
+    function paint() {
+      const y = view.getFullYear(), m = view.getMonth();
+      title.textContent = view.toLocaleDateString("es-ES", { month: "long", year: "numeric" });
+      grid.innerHTML = "";
+      let offset = new Date(y, m, 1).getDay();
+      offset = offset === 0 ? 6 : offset - 1;
+      for (let i = 0; i < offset; i++) grid.appendChild(document.createElement("i"));
+      const todayK = dayKey(new Date());
+      const dim = new Date(y, m + 1, 0).getDate();
+      for (let d = 1; d <= dim; d++) {
+        const date = new Date(y, m, d);
+        const k = dayKey(date);
+        const b = document.createElement("button");
+        b.type = "button";
+        b.textContent = String(d);
+        if (byDay.has(k)) b.classList.add("has");
+        if (k === todayK) b.classList.add("td");
+        b.setAttribute("aria-pressed", String(k === selected));
+        b.setAttribute("aria-label", date.toLocaleDateString("es-ES", { weekday: "long", day: "numeric", month: "long" }));
+        b.addEventListener("click", () => emit(k));
+        grid.appendChild(b);
+      }
+    }
+
+    (root.querySelector("[data-prev]") as HTMLElement).addEventListener("click", () => {
+      view = new Date(view.getFullYear(), view.getMonth() - 1, 1);
+      paint();
+    });
+    (root.querySelector("[data-next]") as HTMLElement).addEventListener("click", () => {
+      view = new Date(view.getFullYear(), view.getMonth() + 1, 1);
+      paint();
+    });
+
+    paint();
+    root.dispatchEvent(
+      new CustomEvent("cal-select", { detail: { date: selected, items: byDay.get(selected!) ?? [] }, bubbles: false }),
+    );
+  });
+</script>

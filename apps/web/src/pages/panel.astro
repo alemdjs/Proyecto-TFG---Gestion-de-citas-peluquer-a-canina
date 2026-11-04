@@ -1,0 +1,132 @@
+---
+import Base from "../layouts/Base.astro";
+import { apiGet } from "../lib/api";
+
+const cookie = Astro.request.headers.get("cookie") ?? "";
+const today = new Date().toISOString().slice(0, 10);
+
+let me: any = null;
+try {
+  me = await apiGet("/api/v1/auth/me", cookie);
+} catch (e: any) {
+  if (e?.status === 401) return Astro.redirect("/login?next=/panel");
+  throw e;
+}
+
+let citas: any[] = [];
+let mascotas: any[] = [];
+let servicios: any[] = [];
+let peluqueros: any[] = [];
+let error: string | null = null;
+
+try {
+  if (me.role === "client") {
+    [citas, mascotas] = (await Promise.all([
+      apiGet("/api/v1/appointments", cookie),
+      apiGet("/api/v1/pets", cookie),
+    ])) as [any[], any[]];
+  } else if (me.role === "groomer") {
+    citas = (await apiGet(`/api/v1/appointments?date=${today}`, cookie)) as any[];
+  } else {
+    [citas, servicios, peluqueros] = (await Promise.all([
+      apiGet("/api/v1/appointments", cookie),
+      apiGet("/api/v1/services/all", cookie),
+      apiGet("/api/v1/staff", cookie),
+    ])) as [any[], any[], any[]];
+  }
+} catch (e: any) {
+  error = e.message;
+}
+
+const now = Date.now();
+const upcoming = citas
+  .filter((a) => new Date(a.startAt).getTime() >= now - 36e5 && a.status !== "cancelled")
+  .sort((a, b) => +new Date(a.startAt) - +new Date(b.startAt));
+const next = upcoming[0];
+
+const stat = (n: string | number, l: string) => ({ n, l });
+const line = (a: any) =>
+  `${a.petName ?? ""} · ${a.serviceName ?? ""} · ${new Date(a.startAt).toLocaleDateString("es-ES", { weekday: "long", day: "numeric", month: "long" })} ${new Date(a.startAt).toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" })}${a.staffName ? ` con ${a.staffName}` : ""}`;
+const statusClass: Record<string, string> = { pending: "", confirmed: "confirmed", done: "done", cancelled: "cancelled" };
+const statusLabel: Record<string, string> = { pending: "Pendiente", confirmed: "Confirmada", done: "Finalizada", cancelled: "Cancelada" };
+---
+
+<Base title="Panel · Peluditos" section="panel">
+  <h1>Hola, {me.name.split(" ")[0]}</h1>
+  {error && <p class="err">{error}</p>}
+
+  {me.role === "client" && (
+    <>
+      <section class="grid g3">
+        {[stat(mascotas.length, "Mascotas"), stat(upcoming.length, "Citas próximas"), stat(citas.filter((a) => a.status === "done").length, "Visitas hechas")].map((s) => (
+          <div class="card"><div class="stat">{s.n}</div><div class="mut">{s.l}</div></div>
+        ))}
+      </section>
+      <section>
+        {next ? (
+          <div class="card next">
+            <p class="small" style="margin:0">Tu próxima cita</p>
+            <div class="stat" style="font-size:1.7rem;margin:.4rem 0">
+              {new Date(next.startAt).toLocaleDateString("es-ES", { weekday: "long", day: "numeric", month: "long" })}, {new Date(next.startAt).toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" })}
+            </div>
+            <p>{line(next)}</p>
+            <a class="btn" href="/mis-citas">Ver mis citas</a>
+          </div>
+        ) : (
+          <div class="card">
+            <p>No tienes citas próximas.</p>
+            <a class="btn acc" href="/reservar">Reservar ahora</a>
+          </div>
+        )}
+      </section>
+      <section>
+        <h2>Siguientes</h2>
+        <ul class="list">
+          {upcoming.slice(1, 4).map((a) => (
+            <li class="card row"><span>{line(a)}</span><span class={`badge ${statusClass[a.status]}`}>{statusLabel[a.status] ?? a.status}</span></li>
+          ))}
+          {upcoming.length <= 1 && <li class="mut">Nada más por ahora.</li>}
+        </ul>
+      </section>
+    </>
+  )}
+
+  {me.role === "groomer" && (
+    <>
+      <section class="grid g3">
+        {[stat(citas.filter((a) => a.status !== "cancelled").length, "Citas hoy"), stat(citas.filter((a) => a.status === "pending").length, "Por confirmar"), stat(citas.filter((a) => a.status === "done").length, "Finalizadas")].map((s) => (
+          <div class="card"><div class="stat">{s.n}</div><div class="mut">{s.l}</div></div>
+        ))}
+      </section>
+      <section>
+        <h2>Citas de hoy</h2>
+        <ul class="list">
+          {citas.map((a) => (
+            <li class="card">
+              <div class="row"><strong>{new Date(a.startAt).toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" })} · {a.petName}</strong><span class={`badge ${statusClass[a.status]}`}>{statusLabel[a.status] ?? a.status}</span></div>
+              <p class="mut small" style="margin:.2rem 0 .6rem">{a.serviceName} · {a.notes ?? ""}</p>
+            </li>
+          ))}
+          {citas.length === 0 && <li><div class="card"><p>Sin citas hoy.</p></div></li>}
+        </ul>
+        <p><a class="btn sec" href="/agenda">Abrir agenda completa</a></p>
+      </section>
+    </>
+  )}
+
+  {me.role === "admin" && (
+    <>
+      <section class="grid g3">
+        {[
+          stat(citas.filter((a) => new Date(a.startAt).toISOString().slice(0, 10) === today && a.status !== "cancelled").length, "Citas hoy"),
+          stat(upcoming.length, "Citas próximas"),
+          stat(`${(servicios.filter((s) => s.active).length)}/${servicios.length}`, "Servicios activos"),
+          stat(peluqueros.filter((s) => s.active).length, "Peluqueros activos"),
+        ].map((s) => (
+          <div class="card"><div class="stat">{s.n}</div><div class="mut">{s.l}</div></div>
+        ))}
+      </section>
+      <p><a class="btn" href="/admin">Gestionar negocio</a></p>
+    </>
+  )}
+</Base>

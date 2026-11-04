@@ -1,0 +1,41 @@
+---
+import Base from "../layouts/Base.astro";
+---
+
+<Base title="Crear cuenta · Peluditos">
+  <div class="card" style="max-width:440px;margin:auto">
+    <h1 style="font-size:1.6rem">Crear cuenta</h1>
+    <form id="f">
+      <label for="name">Nombre</label>
+      <input id="name" required minlength="2" autocomplete="name" />
+      <label for="email">Correo</label>
+      <input id="email" type="email" required autocomplete="email" />
+      <label for="phone">Teléfono</label>
+      <input id="phone" type="tel" autocomplete="tel" />
+      <label for="password">Contraseña (mín. 6)</label>
+      <input id="password" type="password" required minlength="6" autocomplete="new-password" />
+      <p id="msg" class="err"></p>
+      <button class="btn" style="width:100%;margin-top:1rem">Crear cuenta</button>
+    </form>
+    <p class="small" style="margin:1rem 0 0">¿Ya tienes cuenta? <a href="/login">Entra</a></p>
+  </div>
+  <script define:vars={{ apiUrl: import.meta.env.PUBLIC_API_URL ?? "http://localhost:3000" }}>
+    document.getElementById("f").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const res = await fetch(`${apiUrl}/api/v1/auth/register`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: document.getElementById("name").value,
+          email: document.getElementById("email").value,
+          phone: document.getElementById("phone").value || undefined,
+          password: document.getElementById("password").value,
+        }),
+      });
+      const json = await res.json();
+      if (!json.success) { document.getElementById("msg").textContent = json.error; return; }
+      window.location.href = "/mis-mascotas";
+    });
+  </script>
+</Base>

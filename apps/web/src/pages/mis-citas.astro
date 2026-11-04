@@ -1,0 +1,77 @@
+---
+import Base from "../layouts/Base.astro";
+import ApptCalendar from "../components/ApptCalendar.astro";
+import { API_URL, apiGet } from "../lib/api";
+
+const cookie = Astro.request.headers.get("cookie") ?? "";
+let appointments: any[] = [];
+let error: string | null = null;
+try {
+  await apiGet("/api/v1/auth/me", cookie);
+  appointments = (await apiGet("/api/v1/appointments", cookie)) as any[];
+} catch (e: any) {
+  if (e?.status === 401) return Astro.redirect("/login?next=/mis-citas");
+  error = e.message;
+}
+const ok = Astro.url.searchParams.get("ok");
+const statusLabel: Record<string, string> = { pending: "Pendiente", confirmed: "Confirmada", done: "Finalizada", cancelled: "Cancelada" };
+---
+
+<Base title="Mis citas · Peluditos" section="citas">
+  <div class="row">
+    <h1 style="margin:0">Mis citas</h1>
+    <a class="btn acc sm" href="/reservar">Reservar</a>
+  </div>
+  {ok && <div class="card next" style="margin-top:1rem"><p style="margin:0"><strong>¡Reserva creada!</strong> Te esperamos 🐾</p></div>}
+  {error && <p class="err">{error}</p>}
+
+  <section style="margin-top:1.5rem">
+    <ApptCalendar appointments={appointments} />
+  </section>
+
+  <section>
+    <h2 id="day-title"></h2>
+    <div id="day-list" class="list"></div>
+  </section>
+
+  <script define:vars={{ apiUrl: API_URL }}>
+    const labels = { pending: "Pendiente", confirmed: "Confirmada", done: "Finalizada", cancelled: "Cancelada" };
+    const list = document.getElementById("day-list");
+    const dayTitle = document.getElementById("day-title");
+    document.querySelector(".appt-cal")?.addEventListener("cal-select", (e) => {
+      const { date, items } = e.detail;
+      const [y, m, d] = date.split("-").map(Number);
+      dayTitle.textContent = new Date(y, m - 1, d).toLocaleDateString("es-ES", {
+        weekday: "long", day: "numeric", month: "long",
+      });
+      list.innerHTML = "";
+      if (!items.length) {
+        list.innerHTML = `<li><div class="card"><p>Nada este día.</p><a class="btn acc" href="/reservar">Reservar</a></div></li>`;
+        return;
+      }
+      for (const a of items.sort((x, y) => +new Date(x.startAt) - +new Date(y.startAt))) {
+        const li = document.createElement("li");
+        li.className = "card";
+        const canCancel = a.status === "pending" || a.status === "confirmed";
+        const at = new Date(a.startAt);
+        li.innerHTML =
+          `<div class="row"><strong>${at.toLocaleDateString("es-ES", { weekday: "short", day: "numeric", month: "short" })}, ${at.toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" })}</strong><span class="badge ${a.status}">${labels[a.status]}</span></div>` +
+          `<p style="margin:.3rem 0">${a.serviceName ?? ""} · ${a.petName ?? ""}${a.staffName ? ` con ${a.staffName}` : ""}</p>` +
+          (canCancel ? `<button type="button" class="btn bad sm">Cancelar cita</button>` : "");
+        if (canCancel) {
+          li.querySelector("button").addEventListener("click", async () => {
+            if (!confirm("¿Cancelar esta cita?")) return;
+            const res = await fetch(`${apiUrl}/api/v1/appointments/${a.id}/status`, {
+              method: "PATCH", credentials: "include",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ status: "cancelled" }),
+            });
+            if (res.ok) window.location.reload();
+            else window.toast("No se pudo cancelar");
+          });
+        }
+        list.appendChild(li);
+      }
+    });
+  </script>
+</Base>

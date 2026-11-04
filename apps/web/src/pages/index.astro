@@ -1,0 +1,116 @@
+---
+import Base from "../layouts/Base.astro";
+import { API_URL, api } from "../lib/api";
+
+interface Service { id: string; name: string; description: string | null; priceCents: number; durationMin: number; }
+
+let services: Service[] = [];
+try {
+  services = (await api("/api/v1/services")) as Service[];
+} catch {
+  services = [];
+}
+
+// Primer hueco libre (para la tarjeta "Primer hueco libre" del hero)
+let firstSlot: { date: string; time: string; staffName: string; serviceName: string; durationMin: number } | null = null;
+if (services.length) {
+  const s0 = services[0];
+  const today = new Date();
+  outer: for (let i = 0; i < 14; i++) {
+    const d = new Date(today.getFullYear(), today.getMonth(), today.getDate() + i);
+    if (d.getDay() === 0) continue;
+    const date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    try {
+      const slots = (await api(
+        `/api/v1/availability?serviceId=${s0.id}&date=${date}`,
+      )) as { start: string; staffName: string }[];
+      if (slots.length) {
+        const at = new Date(slots[0].start);
+        firstSlot = {
+          date,
+          time: at.toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" }),
+          staffName: slots[0].staffName,
+          serviceName: s0.name,
+          durationMin: s0.durationMin,
+        };
+        break outer;
+      }
+    } catch { /* seguir buscando */ }
+  }
+}
+
+const dayLabel = (dateStr: string) => {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  const dt = new Date(y, m - 1, d);
+  const now = new Date();
+  const days = Math.round((new Date(y, m - 1, d).getTime() - new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()) / 864e5);
+  if (days <= 0) return "Hoy";
+  if (days === 1) return "Mañana";
+  return dt.toLocaleDateString("es-ES", { weekday: "long", day: "numeric", month: "long" });
+};
+---
+
+<Base title="Peluditos, peluquería canina" section="landing">
+  <section class="hero">
+    <div>
+      <h1>Baño, corte y mimos para quien mueve la cola.</h1>
+      <p style="font-size:1.15rem">Reserva en menos de un minuto. Ves los huecos libres reales y eliges peluquero, día y hora.</p>
+      <div class="opts">
+        <a class="btn acc" href="/reservar">Reservar cita</a>
+        <a class="btn sec" href="#servicios">Ver precios</a>
+      </div>
+    </div>
+    <div class="card next">
+      <p class="small" style="margin:0">Primer hueco libre</p>
+      {firstSlot ? (
+        <>
+          <div class="stat" style="margin:.4rem 0">{dayLabel(firstSlot.date)}, {firstSlot.time}</div>
+          <p class="mut">con {firstSlot.staffName} · {firstSlot.serviceName} ({firstSlot.durationMin} min)</p>
+          <a class="btn" href="/reservar">Reservar este hueco</a>
+        </>
+      ) : (
+        <p>Sin huecos por ahora.</p>
+      )}
+    </div>
+  </section>
+
+  <section id="servicios">
+    <h2>Servicios y precios</h2>
+    <div class="grid g3">
+      {services.length === 0 && (
+        <div class="card"><p>La API no responde ahora mismo. Llámanos al 910 000 000.</p></div>
+      )}
+      {services.map((s) => (
+        <div class="card">
+          <h3>{s.name}</h3>
+          <div class="price">{(s.priceCents / 100).toFixed(2).replace(".", ",")} €</div>
+          <p class="mut small" style="margin:0">{s.durationMin} min</p>
+        </div>
+      ))}
+    </div>
+  </section>
+
+  <section>
+    <h2>Cómo funciona</h2>
+    <ol class="grid g3" style="padding:0;list-style:none">
+      {[
+        ["Elige servicio y peluquero", "Te mostramos solo lo que está disponible."],
+        ["Escoge día y hora", "Calendario con huecos libres y el más próximo marcado."],
+        ["Confirma y listo", "Recibes tu cita en “Mis citas” y puedes cancelarla."],
+      ].map(([a, b], i) => (
+        <li class="card">
+          <div class="step"><b>{i + 1}</b><h3 style="margin:0">{a}</h3></div>
+          <p class="mut" style="margin:.6rem 0 0">{b}</p>
+        </li>
+      ))}
+    </ol>
+  </section>
+
+  <section id="contacto">
+    <h2>Contacto</h2>
+    <div class="card">
+      <p>Calle de los Olmos 12, Madrid · <a href="tel:+34910000000">910 000 000</a> · <a href="mailto:hola@peluditos.example">hola@peluditos.example</a></p>
+      <p class="mut" style="margin:0">Lunes a sábado de 10:00 a 19:00. Domingos cerrado.</p>
+    </div>
+  </section>
+</Base>

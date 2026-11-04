@@ -1,0 +1,20 @@
+{
+  "name": "peluqueria-canina",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": ["apps/*"],
+  "scripts": {
+    "dev:api": "bun --filter @peluqueria/api dev",
+    "dev:web": "bun --filter @peluqueria/web dev",
+    "build:web": "bun --filter @peluqueria/web build",
+    "db:generate": "bun --filter @peluqueria/api db:generate",
+    "db:migrate": "bun --filter @peluqueria/api db:migrate",
+    "db:seed": "bun --filter @peluqueria/api db:seed"
+  },
+  "engines": {
+    "bun": ">=1.4.4"
+  },
+  "devDependencies": {
+    "typescript": "6.0.3"
+  }
+}

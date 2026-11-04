@@ -1,0 +1,66 @@
+---
+import Base from "../layouts/Base.astro";
+import { apiGet } from "../lib/api";
+
+const cookie = Astro.request.headers.get("cookie") ?? "";
+let services: any[] = [];
+let staff: any[] = [];
+let upcoming: any[] = [];
+let error: string | null = null;
+try {
+  const me = (await apiGet("/api/v1/auth/me", cookie)) as any;
+  if (me.role !== "admin") return Astro.redirect("/login?next=/admin");
+  const today = new Date().toISOString().slice(0, 10);
+  [services, staff, upcoming] = (await Promise.all([
+    apiGet("/api/v1/services/all", cookie),
+    apiGet("/api/v1/staff/all", cookie),
+    apiGet(`/api/v1/appointments?from=${today}T00:00:00`, cookie),
+  ])) as [any[], any[], any[]];
+} catch (e: any) {
+  if (e?.status === 401) return Astro.redirect("/login?next=/admin");
+  error = e.message;
+}
+---
+
+<Base title="Administración · Peluditos" section="admin">
+  <h1>Administración</h1>
+  {error && <p class="err">{error}</p>}
+  <div class="grid g2">
+    <section>
+      <h2>Peluqueros</h2>
+      <ul class="list">
+        {staff.map((g) => (
+          <li class="card row">
+            <div><strong>{g.name}</strong><div class="mut small">{(g.serviceIds ?? []).length} servicios asignados</div></div>
+            <span class={`badge ${g.active ? "confirmed" : "cancelled"}`}>{g.active ? "Activo" : "Inactivo"}</span>
+          </li>
+        ))}
+      </ul>
+      <p style="margin-top:.8rem"><a class="btn" href="/admin/peluqueros">Gestionar peluqueros</a></p>
+    </section>
+    <section>
+      <h2>Servicios</h2>
+      <ul class="list">
+        {services.map((s) => (
+          <li class="card row">
+            <div><strong>{s.name}</strong><div class="mut small">{(s.priceCents / 100).toFixed(2).replace(".", ",")} € · {s.durationMin} min</div></div>
+            <span class={`badge ${s.active ? "confirmed" : "cancelled"}`}>{s.active ? "Activo" : "Inactivo"}</span>
+          </li>
+        ))}
+      </ul>
+      <p style="margin-top:.8rem"><a class="btn" href="/admin/servicios">Gestionar servicios</a></p>
+    </section>
+  </div>
+  <section>
+    <h2>Citas próximas ({upcoming.filter((a) => a.status !== "cancelled").length})</h2>
+    <ul class="list">
+      {upcoming.filter((a) => a.status !== "cancelled").slice(0, 8).map((a) => (
+        <li class="card row">
+          <span>{new Date(a.startAt).toLocaleString("es-ES", { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })} · {a.petName} · {a.serviceName}</span>
+          <span class={`badge ${a.status}`}>{a.status}</span>
+        </li>
+      ))}
+    </ul>
+    <p style="margin-top:.8rem"><a class="btn sec" href="/admin/citas">Ver todas las citas</a></p>
+  </section>
+</Base>

@@ -1,0 +1,123 @@
+---
+import Base from "../../layouts/Base.astro";
+import { API_URL, apiGet } from "../../lib/api";
+
+const cookie = Astro.request.headers.get("cookie") ?? "";
+let services: any[] = [];
+let staff: any[] = [];
+let error: string | null = null;
+try {
+  const me = (await apiGet("/api/v1/auth/me", cookie)) as any;
+  if (me.role !== "admin") return Astro.redirect("/login?next=/admin/servicios");
+  [services, staff] = (await Promise.all([
+    apiGet("/api/v1/services/all", cookie),
+    apiGet("/api/v1/staff/all", cookie),
+  ])) as [any[], any[]];
+} catch (e: any) {
+  if (e?.status === 401) return Astro.redirect("/login?next=/admin/servicios");
+  error = e.message;
+}
+const groomersOf = (id: string) =>
+  staff.filter((s) => (s.serviceIds ?? []).includes(id)).map((s) => s.name);
+---
+
+<Base title="Servicios · Admin">
+  <p class="mut small"><a href="/admin">← Administración</a></p>
+  <h1>Servicios</h1>
+  {error && <p class="err">{error}</p>}
+
+  <form class="card" id="create" style="margin-bottom:1rem">
+    <h3>Añadir servicio</h3>
+    <div class="grid g2">
+      <div><label for="c-name">Nombre</label><input id="c-name" name="name" required minlength="2" /></div>
+      <div><label for="c-desc">Descripción</label><input id="c-desc" name="description" /></div>
+      <div><label for="c-price">Precio (€)</label><input id="c-price" name="price" required type="number" min="0" step="0.5" /></div>
+      <div><label for="c-dur">Duración (min)</label><input id="c-dur" name="durationMin" required type="number" min="10" max="480" /></div>
+    </div>
+    <p id="create-err" class="err"></p>
+    <button class="btn" style="margin-top:.8rem">Añadir servicio</button>
+  </form>
+
+  <ul class="list">
+    {services.map((s) => (
+      <li class="card" data-id={s.id} data-active={String(s.active)}>
+        <div class="row">
+          <div>
+            <strong>{s.name}</strong>
+            <div class="mut small">{(s.priceCents / 100).toFixed(2).replace(".", ",")} € · {s.durationMin} min</div>
+            <div class="mut small">Lo ofrecen: {groomersOf(s.id).join(", ") || "nadie ⚠️"}</div>
+          </div>
+          <button
+            type="button" class="sw" role="switch"
+            aria-checked={s.active ? "true" : "false"}
+            aria-label={`${s.name} activo`} data-act="toggle"
+          ></button>
+        </div>
+        <form data-form style="margin-top:.6rem">
+          <div class="grid g2">
+            <div><label>Nombre</label><input name="name" value={s.name} required minlength="2" /></div>
+            <div><label>Descripción</label><input name="description" value={s.description ?? ""} /></div>
+            <div><label>Precio (€)</label><input name="price" type="number" min="0" step="0.5" value={(s.priceCents / 100).toFixed(2)} required /></div>
+            <div><label>Duración (min)</label><input name="durationMin" type="number" min="10" max="480" value={s.durationMin} required /></div>
+          </div>
+          <div class="opts" style="margin-top:.6rem">
+            <button class="btn sm">Guardar</button>
+            <button type="button" class="btn bad sm" data-act="del">Eliminar</button>
+          </div>
+        </form>
+      </li>
+    ))}
+    {services.length === 0 && <li><div class="card"><p>Sin servicios.</p></div></li>}
+  </ul>
+
+  <script define:vars={{ apiUrl: API_URL }}>
+    document.getElementById("create")?.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const f = new FormData(e.target);
+      const res = await fetch(`${apiUrl}/api/v1/services`, {
+        method: "POST", credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: f.get("name"), description: f.get("description") || undefined,
+          priceCents: Math.round(Number(f.get("price")) * 100), durationMin: Number(f.get("durationMin")),
+        }),
+      });
+      if (res.ok) { window.toast("Servicio creado"); window.location.reload(); }
+      else document.getElementById("create-err").textContent = (await res.json().catch(() => ({}))).error ?? "No se pudo crear";
+    });
+
+    document.querySelectorAll("li[data-id]").forEach((art) => {
+      const id = art.dataset.id;
+      art.querySelector('[data-act="toggle"]')?.addEventListener("click", async (ev) => {
+        const sw = ev.currentTarget;
+        const res = await fetch(`${apiUrl}/api/v1/services/${id}`, {
+          method: "PATCH", credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ active: art.dataset.active !== "true" }),
+        });
+        if (res.ok) window.location.reload();
+        else window.toast("No se pudo cambiar");
+      });
+      art.querySelector('[data-act="del"]')?.addEventListener("click", async () => {
+        if (!confirm("¿Eliminar este servicio? Solo es posible si no tiene citas.")) return;
+        const res = await fetch(`${apiUrl}/api/v1/services/${id}`, { method: "DELETE", credentials: "include" });
+        if (res.ok) { window.toast("Servicio eliminado"); window.location.reload(); }
+        else window.toast((await res.json().catch(() => ({}))).error ?? "No se pudo eliminar");
+      });
+      art.querySelector("[data-form]")?.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const f = new FormData(e.target);
+        const res = await fetch(`${apiUrl}/api/v1/services/${id}`, {
+          method: "PATCH", credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name: f.get("name"), description: f.get("description") || null,
+            priceCents: Math.round(Number(f.get("price")) * 100), durationMin: Number(f.get("durationMin")),
+          }),
+        });
+        if (res.ok) { window.toast("Guardado"); window.location.reload(); }
+        else window.toast("No se pudo guardar");
+      });
+    });
+  </script>
+</Base>

@@ -1,0 +1,84 @@
+---
+import Base from "../layouts/Base.astro";
+import ApptCalendar from "../components/ApptCalendar.astro";
+import { API_URL, apiGet } from "../lib/api";
+
+const cookie = Astro.request.headers.get("cookie") ?? "";
+const now = new Date();
+const from = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
+const toD = new Date(now.getFullYear(), now.getMonth() + 3, 0);
+const to = toD.toISOString().slice(0, 10);
+
+let appointments: any[] = [];
+let error: string | null = null;
+try {
+  const me = (await apiGet("/api/v1/auth/me", cookie)) as any;
+  if (me.role !== "groomer" && me.role !== "admin")
+    return Astro.redirect("/login?next=/agenda");
+  appointments = (await apiGet(
+    `/api/v1/appointments?from=${from}T00:00:00&to=${to}T23:59:59`,
+    cookie,
+  )) as any[];
+} catch (e: any) {
+  if (e?.status === 401) return Astro.redirect("/login?next=/agenda");
+  error = e.message;
+}
+---
+
+<Base title="Agenda · Peluditos" section="agenda">
+  <h1>Agenda</h1>
+  {error && <p class="err">{error}</p>}
+
+  <section style="margin-top:1.5rem">
+    <ApptCalendar appointments={appointments} />
+  </section>
+
+  <section>
+    <h2 id="day-title"></h2>
+    <div id="day-list" class="list"></div>
+  </section>
+
+  <script define:vars={{ apiUrl: API_URL }}>
+    const labels = { pending: "Pendiente", confirmed: "Confirmada", done: "Finalizada", cancelled: "Cancelada" };
+    const list = document.getElementById("day-list");
+    const dayTitle = document.getElementById("day-title");
+    const render = (date, items) => {
+      const [y, m, d] = date.split("-").map(Number);
+      dayTitle.textContent = new Date(y, m - 1, d).toLocaleDateString("es-ES", {
+        weekday: "long", day: "numeric", month: "long",
+      });
+      list.innerHTML = "";
+      if (!items.length) {
+        list.innerHTML = `<li><div class="card"><p>Sin citas este día.</p></div></li>`;
+        return;
+      }
+      for (const a of items.sort((x, y) => +new Date(x.startAt) - +new Date(y.startAt))) {
+        const li = document.createElement("li");
+        li.className = "card";
+        const t0 = new Date(a.startAt), t1 = new Date(a.endAt);
+        const hh = (d) => d.toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" });
+        li.innerHTML =
+          `<div class="row"><strong>${hh(t0)} · ${a.petName ?? ""}</strong><span class="badge ${a.status}">${labels[a.status]}</span></div>` +
+          `<p class="mut small" style="margin:.2rem 0 .6rem">${a.serviceName ?? ""} · ${a.notes ?? ""}</p>` +
+          ((a.status === "pending" || a.status === "confirmed")
+            ? `<div class="opts">` +
+              (a.status === "pending" ? `<button type="button" class="btn sm" data-s="confirmed">Confirmar</button>` : "") +
+              (a.status === "confirmed" ? `<button type="button" class="btn acc sm" data-s="done">Finalizar</button>` : "") +
+              `<button type="button" class="btn bad sm" data-s="cancelled">Cancelar</button></div>`
+            : "");
+        li.querySelectorAll("button").forEach((b) =>
+          b.addEventListener("click", async () => {
+            const res = await fetch(`${apiUrl}/api/v1/appointments/${a.id}/status`, {
+              method: "PATCH", credentials: "include",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ status: b.dataset.s }),
+            });
+            if (res.ok) { window.toast("Cita " + b.dataset.s); window.location.reload(); }
+            else window.toast("No permitido");
+          }));
+        list.appendChild(li);
+      }
+    };
+    document.querySelector(".appt-cal")?.addEventListener("cal-select", (e) => render(e.detail.date, e.detail.items));
+  </script>
+</Base>

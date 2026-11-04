@@ -1,0 +1,326 @@
+---
+import Base from "../layouts/Base.astro";
+import { API_URL, api } from "../lib/api";
+
+interface Service { id: string; name: string; description: string | null; priceCents: number; durationMin: number; }
+interface Staff { id: string; name: string; }
+
+let services: Service[] = [];
+let staffByService: Record<string, Staff[]> = {};
+try {
+  services = (await api("/api/v1/services")) as Service[];
+  const entries = await Promise.all(
+    services.map(async (s) => {
+      try {
+        const rows = (await api(`/api/v1/services/${s.id}/staff`)) as Staff[];
+        return [s.id, rows] as [string, Staff[]];
+      } catch {
+        return [s.id, []] as [string, Staff[]];
+      }
+    }),
+  );
+  staffByService = Object.fromEntries(entries);
+} catch { /* aviso en página */ }
+
+const preselected = Astro.url.searchParams.get("serviceId") ?? "";
+---
+
+<Base title="Reservar cita · Peluditos" section="reservar">
+  <h1>Reservar cita</h1>
+  <div class="book">
+    <div class="grid">
+      <div class="card">
+        <div class="step"><b>1</b><h3 style="margin:0">Servicio</h3></div>
+        <div class="opts" role="radiogroup" aria-label="Servicio" style="margin-top:.7rem" id="services">
+          {services.map((s) => (
+            <button
+              type="button" class="opt" role="radio"
+              data-service={s.id}
+              aria-checked={s.id === preselected ? "true" : "false"}
+            >
+              {s.name}<br />
+              <span class="mut small">{(s.priceCents / 100).toFixed(2).replace(".", ",")} € · {s.durationMin} min</span>
+            </button>
+          ))}
+          {services.length === 0 && <p class="err">No se pudo cargar el catálogo. ¿Está la API en marcha?</p>}
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="step"><b>2</b><h3 style="margin:0">Peluquero</h3></div>
+        <div class="opts" style="margin-top:.7rem" id="groomers"></div>
+      </div>
+
+      <div class="card">
+        <div class="step"><b>3</b><h3 style="margin:0">Día y hora</h3></div>
+        <div id="next-slot"></div>
+        <div class="row" style="margin:.5rem 0">
+          <button type="button" class="btn gh sm" id="prev" aria-label="Mes anterior">‹</button>
+          <strong id="cal-title"></strong>
+          <button type="button" class="btn gh sm" id="next" aria-label="Mes siguiente">›</button>
+        </div>
+        <div class="cal" id="cal-grid">
+          <span>L</span><span>M</span><span>X</span><span>J</span><span>V</span><span>S</span><span>D</span>
+        </div>
+        <p class="mut small">Días con punto: con huecos. Domingos cerrado.</p>
+        <div id="day-slots"></div>
+      </div>
+
+      <div class="card">
+        <div class="step"><b>4</b><h3 style="margin:0">Tu mascota</h3></div>
+        <div id="login-warn" class="card next" style="display:none;margin-top:.7rem">
+          <p class="small" style="margin:0">No has iniciado sesión: podrás mirar huecos, pero al confirmar te pediremos entrar.
+          <a href="/login?next=/reservar">Entrar</a> · <a href="/register">Crear cuenta</a></p>
+        </div>
+        <label for="pet">Elige mascota</label>
+        <select id="pet" required><option value="">— Cargando… —</option></select>
+        <p class="small"><a href="/mis-mascotas">Gestionar mis mascotas</a></p>
+        <label for="notes">Notas para el peluquero (opcional)</label>
+        <textarea id="notes" rows="3" placeholder="Alergias, miedo al secador…"></textarea>
+      </div>
+    </div>
+
+    <aside class="card sum">
+      <h3>Resumen</h3>
+      <p style="margin:0" id="sum-service"><span class="mut">Elige un servicio</span></p>
+      <p style="margin:0" id="sum-when"><span class="mut">Elige día y hora</span></p>
+      <p class="small mut" style="margin:.6rem 0" id="sum-miss"></p>
+      <button type="button" class="btn acc" style="width:100%" id="book">Confirmar cita</button>
+    </aside>
+  </div>
+
+  <script define:vars={{ apiUrl: API_URL, staffByService, preselected, services }}>
+    const $ = (id) => document.getElementById(id);
+    const svcById = Object.fromEntries(services.map((s) => [s.id, s]));
+    let serviceId = preselected || null;
+    let staffId = "any";
+    let day = null, slotMin = null, slotStaff = null;
+    let view = (() => { const d = new Date(); return new Date(d.getFullYear(), d.getMonth(), 1); })();
+    const cache = new Map();
+    const pad = (n) => String(n).padStart(2, "0");
+    const dayKey = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    const tm = (m) => `${pad(Math.floor(m / 60))}:${pad(m % 60)}`;
+    const money = (c) => (c / 100).toFixed(2).replace(".", ",") + " €";
+
+    const missing = () => [
+      !serviceId && "servicio",
+      !day && "día",
+      day && slotMin == null && "hora",
+      !$("pet").value && "mascota",
+    ].filter(Boolean);
+
+    function refreshSummary() {
+      const s = serviceId ? svcById[serviceId] : null;
+      $("sum-service").innerHTML = s ? `${s.name} · ${money(s.priceCents)}` : '<span class="mut">Elige un servicio</span>';
+      const g = staffId === "any" ? null : (staffByService[serviceId] ?? []).find((x) => x.id === staffId);
+      let who = g ? g.name : "peluquero";
+      if (!g && day && slotMin != null) {
+        const arr = cache.get(`${serviceId}|${staffId}|${day}`) || [];
+        const hit = arr.find((x) => x.m === slotMin);
+        if (hit) who = hit.staffName;
+      }
+      $("sum-when").innerHTML =
+        day && slotMin != null
+          ? `${new Date(day + "T12:00:00").toLocaleDateString("es-ES", { weekday: "long", day: "numeric", month: "long" })}, ${tm(slotMin)} con ${who}`
+          : '<span class="mut">Elige día y hora</span>';
+      const miss = missing();
+      $("sum-miss").textContent = miss.length ? "Falta: " + miss.join(", ") : "Todo listo";
+      $("sum-miss").className = "small " + (miss.length ? "mut" : "okk");
+    }
+
+    // --- paso 1: servicios ---
+    document.querySelectorAll("[data-service]").forEach((b) =>
+      b.addEventListener("click", () => selectService(b.dataset.service)));
+    function selectService(id) {
+      serviceId = id; staffId = "any"; day = null; slotMin = null; slotStaff = null;
+      document.querySelectorAll("[data-service]").forEach((x) =>
+        x.setAttribute("aria-checked", String(x.dataset.service === id)));
+      renderGroomers(); paintCalendar(true); renderDaySlots(); refreshSummary();
+    }
+
+    // --- paso 2: peluqueros ---
+    function renderGroomers() {
+      const box = $("groomers");
+      box.innerHTML = "";
+      const list = serviceId ? (staffByService[serviceId] ?? []) : [];
+      const mk = (id, top, sub) => {
+        const b = document.createElement("button");
+        b.type = "button"; b.className = "opt";
+        b.setAttribute("aria-pressed", String(staffId === id));
+        b.innerHTML = `${top}<br><span class="mut small">${sub}</span>`;
+        b.onclick = () => { staffId = id; day = null; slotMin = null; slotStaff = null; renderGroomers(); paintCalendar(true); renderDaySlots(); refreshSummary(); };
+        box.appendChild(b);
+      };
+      if (!serviceId) { box.innerHTML = '<span class="mut small">Primero elige un servicio.</span>'; return; }
+      mk("any", "Cualquiera", "Más huecos");
+      for (const g of list) mk(g.id, g.name, "Disponible");
+      if (!list.length) box.insertAdjacentHTML("beforeend", '<span class="err">Nadie ofrece este servicio ahora mismo.</span>');
+    }
+
+    // --- paso 3: calendario ---
+    async function slotsFor(date) {
+      const key = `${serviceId}|${staffId}|${date}`;
+      if (!cache.has(key)) {
+        const dur = svcById[serviceId].durationMin;
+        const params = new URLSearchParams({
+          serviceId, date, ...(staffId !== "any" ? { staffId } : {}),
+        });
+        const res = await fetch(`${apiUrl}/api/v1/availability?${params}`);
+        const json = await res.json();
+        // Agrupar por hora (la API devuelve un slot por peluquero libre).
+        // Se conserva el ISO exacto del primer slot para reservar sin deriva horaria.
+        const byMin = new Map();
+        for (const s of json.success ? json.data : []) {
+          const m = new Date(s.start).getHours() * 60 + new Date(s.start).getMinutes();
+          if (!byMin.has(m)) byMin.set(m, { m, gs: [], iso: s.start, staffName: s.staffName });
+          byMin.get(m).gs.push(s.staffId);
+        }
+        cache.set(key, [...byMin.values()].sort((a, b) => a.m - b.m));
+      }
+      return cache.get(key);
+    }
+
+    async function paintCalendar(resetDay) {
+      if (resetDay) day = day ?? null;
+      const grid = $("cal-grid");
+      grid.querySelectorAll("button[data-day]").forEach((b) => b.remove());
+      grid.querySelectorAll("i[data-pad]").forEach((b) => b.remove());
+      const title = $("cal-title");
+      title.textContent = view.toLocaleDateString("es-ES", { month: "long", year: "numeric" });
+      $("prev").toggleAttribute("disabled",
+        view <= new Date(new Date().getFullYear(), new Date().getMonth(), 1));
+      if (!serviceId) return;
+      const y = view.getFullYear(), m = view.getMonth();
+      let offset = new Date(y, m, 1).getDay();
+      offset = offset === 0 ? 6 : offset - 1;
+      for (let i = 0; i < offset; i++) {
+        const padEl = document.createElement("i"); padEl.dataset.pad = "1"; grid.appendChild(padEl);
+      }
+      const todayK = dayKey(new Date());
+      const dim = new Date(y, m + 1, 0).getDate();
+      const cells = [];
+      for (let d = 1; d <= dim; d++) {
+        const k = dayKey(new Date(y, m, d));
+        const closed = new Date(y, m, d).getDay() === 0 || k < todayK;
+        const b = document.createElement("button");
+        b.type = "button"; b.dataset.day = k; b.disabled = closed;
+        b.setAttribute("aria-pressed", String(day === k));
+        if (k === todayK) b.classList.add("td");
+        b.setAttribute("aria-label", new Date(y, m, d).toLocaleDateString("es-ES", { weekday: "long", day: "numeric", month: "long" }));
+        b.textContent = String(d);
+        grid.appendChild(b);
+        if (!closed) cells.push({ b, k });
+      }
+      await Promise.all(cells.map(async ({ b, k }) => {
+        let n = -1;
+        try { n = (await slotsFor(k)).length; } catch { n = -1; }
+        if (n > 0) {
+          b.classList.add("has");
+          b.setAttribute("aria-label", b.getAttribute("aria-label") + `, ${n} huecos`);
+          b.onclick = () => { day = k; slotMin = null; slotStaff = null; paintCalendar(false); renderDaySlots(); refreshSummary(); };
+        }
+      }));
+      // Hueco más próximo
+      const nsBox = $("next-slot");
+      try {
+        const dur = svcById[serviceId].durationMin;
+        let found = null;
+        for (let i = 0; i < 30 && !found; i++) {
+          const d = new Date(); d.setDate(d.getDate() + i);
+          if (d.getDay() === 0) continue;
+          const k = dayKey(d);
+          const arr = await slotsFor(k);
+          if (arr.length) found = { k, m: arr[0].m, g: arr[0].gs[0], name: arr[0].staffName };
+        }
+        nsBox.innerHTML = found
+          ? `<div class="card next" style="margin:.8rem 0"><div class="row"><div><strong>Hueco más próximo</strong><div>${new Date(found.k + "T12:00:00").toLocaleDateString("es-ES", { weekday: "long", day: "numeric", month: "long" })} a las ${tm(found.m)} con ${found.name}</div></div><button type="button" class="btn sm" id="pick-next">Elegir</button></div></div>`
+          : "";
+        $("pick-next")?.addEventListener("click", () => {
+          const [yy, mm] = found.k.split("-").map(Number);
+          view = new Date(yy, mm - 1, 1);
+          day = found.k; slotMin = found.m;
+          slotStaff = staffId === "any" ? found.g : staffId;
+          paintCalendar(false); renderDaySlots(); refreshSummary();
+        });
+      } catch { nsBox.innerHTML = ""; }
+    }
+
+    $("prev").addEventListener("click", () => { view = new Date(view.getFullYear(), view.getMonth() - 1, 1); paintCalendar(false); });
+    $("next").addEventListener("click", () => { view = new Date(view.getFullYear(), view.getMonth() + 1, 1); paintCalendar(false); });
+
+    function renderDaySlots() {
+      const box = $("day-slots");
+      if (!serviceId || !day) { box.innerHTML = ""; return; }
+      box.innerHTML = `<div class="lab">Horas libres · ${new Date(day + "T12:00:00").toLocaleDateString("es-ES", { weekday: "long", day: "numeric", month: "long" })}</div><div class="slots" id="slot-list"></div>`;
+        const list = $("slot-list");
+      slotsFor(day).then((arr) => {
+        if (!arr.length) { box.innerHTML += '<p class="err">No quedan huecos este día. Prueba otro o elige “Cualquiera”.</p>'; return; }
+        for (const s of arr) {
+          const b = document.createElement("button");
+          b.type = "button"; b.className = "opt";
+          b.setAttribute("aria-pressed", String(slotMin === s.m));
+          b.textContent = tm(s.m);
+          b.onclick = () => {
+            slotMin = s.m;
+            [...list.children].forEach((c) => c.setAttribute("aria-pressed", "false"));
+            b.setAttribute("aria-pressed", "true");
+            refreshSummary();
+          };
+          list.appendChild(b);
+        }
+      }).catch(() => { box.innerHTML += '<p class="err">Sin conexión con la API.</p>'; });
+    }
+
+    // --- paso 4: mascotas ---
+    (async () => {
+      try {
+        const res = await fetch(`${apiUrl}/api/v1/pets`, { credentials: "include" });
+        if (res.status === 401) $("login-warn").style.display = "";
+        const json = await res.json();
+        const sel = $("pet");
+        sel.innerHTML = `<option value="">— Elige mascota —</option>`;
+        for (const p of (json.success ? json.data : [])) {
+          const o = document.createElement("option");
+          o.value = p.id;
+          o.textContent = `${p.name} (${p.breed})`;
+          sel.appendChild(o);
+        }
+        if (sel.options.length <= 1) sel.innerHTML = `<option value="">— Sin mascotas: créala primero —</option>`;
+      } catch {
+        $("pet").innerHTML = `<option value="">— Sin conexión —</option>`;
+      }
+      refreshSummary();
+    })();
+    $("pet").addEventListener("change", refreshSummary);
+
+    // --- confirmar ---
+    $("book").addEventListener("click", async () => {
+      const miss = missing();
+      if (miss.length) { window.toast("Falta: " + miss.join(", ")); return; }
+      const arr = await slotsFor(day);
+      const slot = arr.find((x) => x.m === slotMin);
+      const res = await fetch(`${apiUrl}/api/v1/appointments`, {
+        method: "POST", credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          petId: $("pet").value, serviceId,
+          staffId: staffId === "any" ? slot.gs[0] : staffId,
+          startAt: slot.iso,
+          notes: $("notes").value || undefined,
+        }),
+      });
+      let json = {};
+      try { json = await res.json(); } catch { /* noop */ }
+      if (!json.success) {
+        if (res.status === 401) { window.location.href = "/login?next=/reservar"; return; }
+        window.toast(json.error ?? "No se pudo reservar");
+        return;
+      }
+      window.location.href = "/mis-citas?ok=1";
+    });
+
+    renderGroomers();
+    paintCalendar(true);
+    refreshSummary();
+  </script>
+</Base>

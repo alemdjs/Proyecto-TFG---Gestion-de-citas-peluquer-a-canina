@@ -1,0 +1,97 @@
+---
+import Base from "../../layouts/Base.astro";
+import { API_URL, apiGet } from "../../lib/api";
+
+const cookie = Astro.request.headers.get("cookie") ?? "";
+const fDate = Astro.url.searchParams.get("date") ?? "";
+const fStaff = Astro.url.searchParams.get("staffId") ?? "";
+const fStatus = Astro.url.searchParams.get("status") ?? "";
+
+let appointments: any[] = [];
+let staff: any[] = [];
+let error: string | null = null;
+try {
+  const me = (await apiGet("/api/v1/auth/me", cookie)) as any;
+  if (me.role !== "admin") return Astro.redirect("/login?next=/admin/citas");
+  const params = new URLSearchParams({
+    ...(fDate ? { date: fDate } : { from: `${new Date().toISOString().slice(0, 10)}T00:00:00` }),
+    ...(fStaff ? { staffId: fStaff } : {}),
+  });
+  [appointments, staff] = (await Promise.all([
+    apiGet(`/api/v1/appointments?${params}`, cookie),
+    apiGet("/api/v1/staff", cookie),
+  ])) as [any[], any[]];
+  if (fStatus) appointments = appointments.filter((a) => a.status === fStatus);
+} catch (e: any) {
+  if (e?.status === 401) return Astro.redirect("/login?next=/admin/citas");
+  error = e.message;
+}
+const labels: Record<string, string> = { pending: "Pendiente", confirmed: "Confirmada", done: "Finalizada", cancelled: "Cancelada" };
+---
+
+<Base title="Citas · Admin">
+  <p class="mut small"><a href="/admin">← Administración</a></p>
+  <h1>Citas ({appointments.length})</h1>
+  {error && <p class="err">{error}</p>}
+
+  <form method="get" class="card" style="margin-bottom:1rem">
+    <div class="grid g3">
+      <div><label for="f-date">Fecha</label><input type="date" id="f-date" name="date" value={fDate} /></div>
+      <div>
+        <label for="f-staff">Peluquero</label>
+        <select id="f-staff" name="staffId">
+          <option value="">Todos</option>
+          {staff.map((s) => <option value={s.id} selected={s.id === fStaff}>{s.name}</option>)}
+        </select>
+      </div>
+      <div>
+        <label for="f-status">Estado</label>
+        <select id="f-status" name="status">
+          <option value="">Todos</option>
+          {Object.entries(labels).map(([v, l]) => <option value={v} selected={v === fStatus}>{l}</option>)}
+        </select>
+      </div>
+    </div>
+    <div class="opts" style="margin-top:.8rem">
+      <button class="btn sm">Filtrar</button>
+      {fDate && <a class="btn sec sm" href="/admin/citas">Próximas</a>}
+    </div>
+  </form>
+
+  <ul class="list">
+    {appointments.length === 0 && <li><div class="card"><p>Sin citas con esos filtros.</p></div></li>}
+    {appointments.slice(0, 100).map((a) => (
+      <li class="card">
+        <div class="row">
+          <strong>
+            {new Date(a.startAt).toLocaleString("es-ES", { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
+            → {new Date(a.endAt).toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" })}
+          </strong>
+          <span class={`badge ${a.status}`}>{labels[a.status] ?? a.status}</span>
+        </div>
+        <p style="margin:.3rem 0"><strong>{a.petName}</strong> · {a.serviceName}{a.staffName ? ` · con ${a.staffName}` : ""}</p>
+        {a.notes && <p class="mut small">📝 {a.notes}</p>}
+        {a.status !== "cancelled" && a.status !== "done" && (
+          <div class="opts">
+            <button type="button" class="btn sm" data-s="confirmed" data-id={a.id}>Confirmar</button>
+            <button type="button" class="btn acc sm" data-s="done" data-id={a.id}>Finalizar</button>
+            <button type="button" class="btn bad sm" data-s="cancelled" data-id={a.id}>Cancelar</button>
+          </div>
+        )}
+      </li>
+    ))}
+  </ul>
+
+  <script define:vars={{ apiUrl: API_URL }}>
+    document.querySelectorAll("button[data-s]").forEach((b) =>
+      b.addEventListener("click", async () => {
+        const res = await fetch(`${apiUrl}/api/v1/appointments/${b.dataset.id}/status`, {
+          method: "PATCH", credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ status: b.dataset.s }),
+        });
+        if (res.ok) { window.toast("Cita " + b.dataset.s); window.location.reload(); }
+        else window.toast("No permitido");
+      }));
+  </script>
+</Base>

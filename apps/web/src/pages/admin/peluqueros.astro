@@ -1,0 +1,180 @@
+---
+import Base from "../../layouts/Base.astro";
+import { API_URL, apiGet } from "../../lib/api";
+
+const cookie = Astro.request.headers.get("cookie") ?? "";
+let staff: any[] = [];
+let services: any[] = [];
+let groomers: any[] = [];
+let error: string | null = null;
+try {
+  const me = (await apiGet("/api/v1/auth/me", cookie)) as any;
+  if (me.role !== "admin") return Astro.redirect("/login?next=/admin/peluqueros");
+  [staff, services, groomers] = (await Promise.all([
+    apiGet("/api/v1/staff/all", cookie),
+    apiGet("/api/v1/services/all", cookie),
+    apiGet("/api/v1/admin/groomers", cookie),
+  ])) as [any[], any[], any[]];
+} catch (e: any) {
+  if (e?.status === 401) return Astro.redirect("/login?next=/admin/peluqueros");
+  error = e.message;
+}
+---
+
+<Base title="Peluqueros · Admin">
+  <p class="mut small"><a href="/admin">← Administración</a></p>
+  <h1>Peluqueros</h1>
+  {error && <p class="err">{error}</p>}
+
+  <section>
+    <h2>Fichas de agenda ({staff.length})</h2>
+    <p class="mut small">Marca qué servicios ofrece cada peluquero: solo esos saldrán al reservar.</p>
+    <ul class="list">
+      {staff.map((s) => (
+        <li class="card" data-id={s.id} data-active={String(s.active)}>
+          <div class="row">
+            <div>
+              <strong data-name>{s.name}</strong>
+              <form data-edit style="display:none;margin-top:.4rem">
+                <div class="row" style="justify-content:flex-start">
+                  <input name="name" value={s.name} required minlength="2" style="width:auto" />
+                  <button class="btn sm">Guardar</button>
+                </div>
+              </form>
+            </div>
+            <div class="row" style="justify-content:flex-end">
+              <button type="button" class="btn sec sm" data-act="edit">Renombrar</button>
+              <button type="button" class="sw" role="switch" aria-checked={s.active ? "true" : "false"} aria-label={`${s.name} activo`} data-act="toggle"></button>
+              <button type="button" class="btn bad sm" data-act="del">Eliminar</button>
+            </div>
+          </div>
+          <form data-services style="margin-top:.6rem">
+            <span class="lab">Servicios que ofrece</span>
+            <div class="opts" role="group" aria-label={`Servicios de ${s.name}`}>
+              {services.map((svc) => (
+                <label class="opt" style="margin:0;font-weight:500" aria-pressed={((s.serviceIds ?? []).includes(svc.id) && s.active) ? "true" : "false"}>
+                  <input type="checkbox" name="svc" value={svc.id} checked={(s.serviceIds ?? []).includes(svc.id)} disabled={!s.active} style="width:auto;min-height:0" />
+                  {svc.name}
+                </label>
+              ))}
+            </div>
+            <button class="btn sm" style="margin-top:.6rem">Guardar servicios</button>
+          </form>
+        </li>
+      ))}
+    </ul>
+
+    <form class="card" id="create" style="margin-top:.8rem">
+      <h3>Nueva ficha</h3>
+      <div class="row" style="justify-content:flex-start">
+        <input name="name" required minlength="2" placeholder="Nombre del peluquero" style="max-width:280px" />
+        <button class="btn">Crear</button>
+      </div>
+      <p class="mut small" style="margin:.5rem 0 0">Recibirá automáticamente todo el catálogo activo; desmarca lo que no ofrezca.</p>
+    </form>
+  </section>
+
+  <section>
+    <h2>Cuentas de acceso ({groomers.length})</h2>
+    <p class="mut small">Usuarios con rol peluquero que pueden entrar a la agenda.</p>
+    <ul class="list">
+      {groomers.map((g) => (
+        <li class="card row" data-gid={g.id} data-active={String(g.active)}>
+          <div><strong>{g.name}</strong><div class="mut small">{g.email}{g.phone && ` · ${g.phone}`}</div></div>
+          <button type="button" class="sw" role="switch" aria-checked={g.active ? "true" : "false"} aria-label={`${g.name} activo`} data-gtoggle></button>
+        </li>
+      ))}
+    </ul>
+
+    <form class="card" id="groomer-form" style="margin-top:.8rem">
+      <h3>Crear cuenta de peluquero</h3>
+      <div class="grid g2">
+        <div><label for="g-name">Nombre</label><input id="g-name" name="name" required minlength="2" /></div>
+        <div><label for="g-email">Correo</label><input id="g-email" name="email" type="email" required /></div>
+        <div><label for="g-pw">Contraseña inicial</label><input id="g-pw" name="password" type="password" required minlength="6" /></div>
+        <div><label for="g-phone">Teléfono (opcional)</label><input id="g-phone" name="phone" type="tel" /></div>
+      </div>
+      <p id="groomer-error" class="err"></p>
+      <button class="btn" style="margin-top:.8rem">Crear peluquero</button>
+    </form>
+  </section>
+
+  <script define:vars={{ apiUrl: API_URL }}>
+    const errOf = async (res) => (await res.json().catch(() => ({}))).error ?? "Operación no permitida";
+    document.getElementById("create")?.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const res = await fetch(`${apiUrl}/api/v1/staff`, {
+        method: "POST", credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: new FormData(e.target).get("name") }),
+      });
+      if (res.ok) { window.toast("Ficha creada"); window.location.reload(); }
+      else window.toast(await errOf(res));
+    });
+
+    document.querySelectorAll("li[data-id]").forEach((art) => {
+      const id = art.dataset.id;
+      art.querySelector('[data-act="edit"]')?.addEventListener("click", () => {
+        const f = art.querySelector("[data-edit]");
+        f.style.display = f.style.display === "none" ? "" : "none";
+      });
+      art.querySelector("[data-edit]")?.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const res = await fetch(`${apiUrl}/api/v1/staff/${id}`, {
+          method: "PATCH", credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: new FormData(e.target).get("name") }),
+        });
+        if (res.ok) { window.toast("Guardado"); window.location.reload(); }
+        else window.toast(await errOf(res));
+      });
+      art.querySelector('[data-act="toggle"]')?.addEventListener("click", async () => {
+        const res = await fetch(`${apiUrl}/api/v1/staff/${id}`, {
+          method: "PATCH", credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ active: art.dataset.active !== "true" }),
+        });
+        if (res.ok) window.location.reload(); else window.toast(await errOf(res));
+      });
+      art.querySelector('[data-act="del"]')?.addEventListener("click", async () => {
+        if (!confirm("¿Eliminar esta ficha? Solo es posible si no tiene citas.")) return;
+        const res = await fetch(`${apiUrl}/api/v1/staff/${id}`, { method: "DELETE", credentials: "include" });
+        if (res.ok) { window.toast("Ficha eliminada"); window.location.reload(); }
+        else window.toast(await errOf(res));
+      });
+      art.querySelector("[data-services]")?.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const serviceIds = [...art.querySelectorAll('input[name="svc"]:checked')].map((c) => c.value);
+        const res = await fetch(`${apiUrl}/api/v1/staff/${id}/services`, {
+          method: "PUT", credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ serviceIds }),
+        });
+        if (res.ok) { window.toast("Servicios guardados"); window.location.reload(); }
+        else window.toast(await errOf(res));
+      });
+    });
+
+    document.querySelectorAll("[data-gtoggle]").forEach((b) =>
+      b.addEventListener("click", async () => {
+        const art = b.closest("li");
+        const res = await fetch(`${apiUrl}/api/v1/admin/groomers/${art.dataset.gid}`, {
+          method: "PATCH", credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ active: art.dataset.active !== "true" }),
+        });
+        if (res.ok) window.location.reload(); else window.toast(await errOf(res));
+      }));
+
+    document.getElementById("groomer-form")?.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const res = await fetch(`${apiUrl}/api/v1/admin/groomers`, {
+        method: "POST", credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(Object.fromEntries(new FormData(e.target).entries())),
+      });
+      if (res.ok) { window.toast("Peluquero creado"); window.location.reload(); return; }
+      document.getElementById("groomer-error").textContent = await errOf(res);
+    });
+  </script>
+</Base>

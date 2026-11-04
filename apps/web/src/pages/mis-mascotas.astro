@@ -1,0 +1,73 @@
+---
+import Base from "../layouts/Base.astro";
+import { API_URL, apiGet } from "../lib/api";
+
+const cookie = Astro.request.headers.get("cookie") ?? "";
+let pets: any[] = [];
+let error: string | null = null;
+try {
+  await apiGet("/api/v1/auth/me", cookie);
+  pets = (await apiGet("/api/v1/pets", cookie)) as any[];
+} catch (e: any) {
+  if (e?.status === 401) return Astro.redirect("/login?next=/mis-mascotas");
+  error = e.message;
+}
+---
+
+<Base title="Mis mascotas · Peluditos" section="mascotas">
+  <h1>Mis mascotas</h1>
+  {error && <p class="err">{error}</p>}
+  <div class="grid g2">
+    <section>
+      <ul class="list">
+        {pets.map((p) => (
+          <li class="card row">
+            <div><h3 style="margin:0">{p.name}</h3><span class="mut small">{p.breed} · {p.size}{p.weightKg ? ` · ${p.weightKg} kg` : ""}{p.notes ? ` · ${p.notes}` : ""}</span></div>
+          </li>
+        ))}
+        {pets.length === 0 && <li><div class="card"><p>Aún no has añadido mascotas.</p></div></li>}
+      </ul>
+    </section>
+    <form class="card" id="f">
+      <h2 style="font-size:1.3rem">Añadir mascota</h2>
+      <label for="name">Nombre</label>
+      <input id="name" required />
+      <label for="breed">Raza</label>
+      <input id="breed" placeholder="Mestiza" />
+      <label for="size">Tamaño</label>
+      <select id="size">
+        <option value="S">Pequeño (S)</option>
+        <option value="M" selected>Mediano (M)</option>
+        <option value="L">Grande (L)</option>
+        <option value="XL">Extra grande (XL)</option>
+      </select>
+      <label for="weight">Peso (kg)</label>
+      <input id="weight" type="number" step="0.1" />
+      <label for="notes">Notas</label>
+      <input id="notes" placeholder="Alergias, miedos…" />
+      <p id="msg" class="err"></p>
+      <button class="btn" style="margin-top:1rem">Guardar mascota</button>
+    </form>
+  </div>
+  <script define:vars={{ apiUrl: API_URL }}>
+    document.getElementById("f").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const w = document.getElementById("weight").value;
+      const res = await fetch(`${apiUrl}/api/v1/pets`, {
+        method: "POST", credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: document.getElementById("name").value,
+          breed: document.getElementById("breed").value || undefined,
+          size: document.getElementById("size").value,
+          weightKg: w ? Number(w) : undefined,
+          notes: document.getElementById("notes").value || undefined,
+        }),
+      });
+      const json = await res.json();
+      if (!json.success) { document.getElementById("msg").textContent = json.error; return; }
+      window.toast("Mascota guardada");
+      window.location.reload();
+    });
+  </script>
+</Base>
